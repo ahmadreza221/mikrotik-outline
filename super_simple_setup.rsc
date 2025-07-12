@@ -86,12 +86,116 @@
 /ip firewall nat add chain=srcnat out-interface-list=WAN action=masquerade
 
 # Containers
-/container add interface=veth-xray root-dir=usb1/xray logging=yes start-on-boot=yes image=snegowiki/vless-mikrotik envlist=UUID=e73c748e-19fa-4618-a4d9-c7dfb22c66e7,HOST=threegermaoneojhhnweoidsjcdsvhbascbwiuhvhbajgermtree.asdir.link,PORT=443,TYPE=tcp,SECURITY=reality,PBK=fv0Zz9FtroOmuK1Tsn0u98gXSq8XepZKtbdH3lDg9EU,FP=chrome,SNI=yahoo.com,SID=ad2e,SPX=/,COMMENT=🇩🇪3-50.00GB-246175259-LK
+/container add interface=veth-xray root-dir=usb1/xray logging=yes start-on-boot=yes image=snegowiki/vless-mikrotik envlist=UUID=e73c748e-19fa-4618-a4d9-c7dfb22c66e7,HOST=threegermaoneojhhnweoidsjcdsvhbascbwiuhvhbajgermtree.asdir.link,PORT=443,TYPE=tcp,SECURITY=reality,PBK=fv0Zz9FtroOmuK1Tsn0u98gXSq8XepZKtbdH3lDg9EU,FP=chrome,SNI=yahoo.com,SID=ad2e,SPX=%2F,COMMENT=🇩🇪3-50.00GB-246175259-LK
 /container add interface=veth-tun root-dir=usb1/hev-tunnel logging=yes start-on-boot=yes image=ghcr.io/netchx/netch-hev-socks5-tunnel:latest cmdline="--tun-address '172.17.0.3 255.255.255.0' --tun-name tun0 --tun-gw '172.17.0.1' --socks5-address '172.17.0.2:1080' --log-level silent"
 
 # Scripts
 /system script add name=check_vpn source={:local ping_result [/ping 8.8.8.8 count=1 routing-table=vpn]; :if ($ping_result = 0) do={/container stop [find name~"xray"]; /container stop [find name~"hev-tunnel"]; :delay 1s; /container start [find name~"xray"]; /container start [find name~"hev-tunnel"]; :log warning "VPN restarted"}}
-/system script add name=update_vless_key source={:local new_url [:pick $1 0 [:len $1]]; :local url_start [:find $new_url "vless://"]; :if ($url_start = 0) do={:local url_without_prefix [:pick $new_url 8 [:len $new_url]]; :local at_pos [:find $url_without_prefix "@"]; :if ($at_pos > 0) do={:local uuid [:pick $url_without_prefix 0 $at_pos]; :local rest [:pick $url_without_prefix ($at_pos + 1) [:len $url_without_prefix]]; :local colon_pos [:find $rest ":"]; :local question_pos [:find $rest "?"]; :if ($colon_pos > 0) do={:local host [:pick $rest 0 $colon_pos]; :if ($question_pos > 0) do={:local port [:pick $rest ($colon_pos + 1) $question_pos]} else={:local port [:pick $rest ($colon_pos + 1) [:len $rest]]}} else={:if ($question_pos > 0) do={:local host [:pick $rest 0 $question_pos]; :local port "443"} else={:local host $rest; :local port "443"}}; /container set [find name~"xray"] envlist=("UUID=" . $uuid . ",HOST=" . $host . ",PORT=" . $port); /container stop [find name~"xray"]; :delay 1s; /container start [find name~"xray"]; :log info ("Updated: " . $host . ":" . $port)}}}}
+/system script add name=update_vless_key source={
+    :local new_url [:pick $1 0 [:len $1]]
+    :local url_start [:find $new_url "vless://"]
+    :if ($url_start = 0) do={
+        :local url_without_prefix [:pick $new_url 8 [:len $new_url]]
+        :local at_pos [:find $url_without_prefix "@"]
+        :if ($at_pos > 0) do={
+            :local uuid [:pick $url_without_prefix 0 $at_pos]
+            :local rest [:pick $url_without_prefix ($at_pos + 1) [:len $url_without_prefix]]
+            
+            # Extract host and port
+            :local colon_pos [:find $rest ":"]
+            :local question_pos [:find $rest "?"]
+            :if ($colon_pos > 0) do={
+                :local host [:pick $rest 0 $colon_pos]
+                :if ($question_pos > 0) do={
+                    :local port [:pick $rest ($colon_pos + 1) $question_pos]
+                } else={
+                    :local port [:pick $rest ($colon_pos + 1) [:len $rest]]
+                }
+            } else={
+                :if ($question_pos > 0) do={
+                    :local host [:pick $rest 0 $question_pos]
+                    :local port "443"
+                } else={
+                    :local host $rest
+                    :local port "443"
+                }
+            }
+            
+            # Extract query parameters
+            :local query_part ""
+            :local fragment ""
+            :if ($question_pos > 0) do={
+                :local hash_pos [:find $rest "#"]
+                :if ($hash_pos > 0) do={
+                    :local query_part [:pick $rest ($question_pos + 1) $hash_pos]
+                    :local fragment [:pick $rest ($hash_pos + 1) [:len $rest]]
+                } else={
+                    :local query_part [:pick $rest ($question_pos + 1) [:len $rest]]
+                }
+            }
+            
+            # Parse query parameters
+            :local type "tcp"
+            :local security "reality"
+            :local pbk ""
+            :local fp "chrome"
+            :local sni ""
+            :local sid ""
+            :local spx "/"
+            
+            :if ($query_part != "") do={
+                :local param_start 0
+                :local param_end [:find $query_part "&"]
+                :while ($param_end >= 0) do={
+                    :local param [:pick $query_part $param_start $param_end]
+                    :local equal_pos [:find $param "="]
+                    :if ($equal_pos > 0) do={
+                        :local param_name [:pick $param 0 $equal_pos]
+                        :local param_value [:pick $param ($equal_pos + 1) [:len $param]]
+                        :if ($param_name = "type") do={:set type $param_value}
+                        :if ($param_name = "security") do={:set security $param_value}
+                        :if ($param_name = "pbk") do={:set pbk $param_value}
+                        :if ($param_name = "fp") do={:set fp $param_value}
+                        :if ($param_name = "sni") do={:set sni $param_value}
+                        :if ($param_name = "sid") do={:set sid $param_value}
+                        :if ($param_name = "spx") do={:set spx $param_value}
+                    }
+                    :set param_start ($param_end + 1)
+                    :set param_end [:find $query_part "&" $param_start]
+                }
+                # Handle last parameter
+                :local param [:pick $query_part $param_start [:len $query_part]]
+                :local equal_pos [:find $param "="]
+                :if ($equal_pos > 0) do={
+                    :local param_name [:pick $param 0 $equal_pos]
+                    :local param_value [:pick $param ($equal_pos + 1) [:len $param]]
+                    :if ($param_name = "type") do={:set type $param_value}
+                    :if ($param_name = "security") do={:set security $param_value}
+                    :if ($param_name = "pbk") do={:set pbk $param_value}
+                    :if ($param_name = "fp") do={:set fp $param_value}
+                    :if ($param_name = "sni") do={:set sni $param_value}
+                    :if ($param_name = "sid") do={:set sid $param_value}
+                    :if ($param_name = "spx") do={:set spx $param_value}
+                }
+            }
+            
+            # Build environment variables string
+            :local env_string ("UUID=" . $uuid . ",HOST=" . $host . ",PORT=" . $port . ",TYPE=" . $type . ",SECURITY=" . $security . ",PBK=" . $pbk . ",FP=" . $fp . ",SNI=" . $sni . ",SID=" . $sid . ",SPX=" . $spx . ",COMMENT=" . $fragment)
+            
+            # Update container
+            /container set [find name~"xray"] envlist=$env_string
+            /container stop [find name~"xray"]
+            :delay 1s
+            /container start [find name~"xray"]
+            
+            :log info ("VLESS updated: " . $host . ":" . $port . " (" . $type . "/" . $security . ")")
+        } else={
+            :log error "Invalid VLESS URL format"
+        }
+    } else={
+        :log error "URL must start with vless://"
+    }
+}
 
 # Scheduler
 /system scheduler add name=vpn-monitor interval=6s on-event=check_vpn start-time=startup
